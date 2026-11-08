@@ -34,7 +34,7 @@ same six evaluation metrics to see which generalizes best for this task.
 
 ## c. GitHub Repository Link
 
-**https://github.com/sharan-code-ai/dry-bean-ml-classifier-streamlit**
+**https://github.com/iamthesharan/dry-bean-ml-classifier-streamlit**
 
 Contains the complete source code, `requirements.txt`, this `README.md`, the
 test data (`test_data.csv`), and the five saved trained models (`model/*.joblib`).
