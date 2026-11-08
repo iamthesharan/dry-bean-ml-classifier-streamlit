@@ -9,7 +9,6 @@ model/*.joblib.
 import json
 
 import joblib
-import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -21,7 +20,7 @@ from sklearn.metrics import (
 
 st.set_page_config(page_title="Dry Bean Classifier Dashboard", layout="wide")
 
-MODEL_FILES = {
+MODEL_FILE_PATHS = {
     "Logistic Regression": "model/logistic_regression.joblib",
     "Decision Tree": "model/decision_tree.joblib",
     "KNN": "model/knn.joblib",
@@ -31,31 +30,33 @@ MODEL_FILES = {
 
 
 @st.cache_resource
-def load_artifacts():
-    models = {name: joblib.load(path) for name, path in MODEL_FILES.items()}
+def load_models_and_metadata():
+    trained_models = {name: joblib.load(path) for name, path in MODEL_FILE_PATHS.items()}
     label_encoder = joblib.load("model/label_encoder.joblib")
-    with open("model/feature_columns.json") as f:
-        meta = json.load(f)
-    return models, label_encoder, meta
+    with open("model/feature_columns.json") as metadata_file:
+        model_metadata = json.load(metadata_file)
+    return trained_models, label_encoder, model_metadata
 
 
-models, label_encoder, meta = load_artifacts()
-FEATURE_COLS = meta["feature_columns"]
-TARGET_COL = meta["target_column"]
-CLASS_NAMES = meta["classes"]
+trained_models, label_encoder, model_metadata = load_models_and_metadata()
+FEATURE_COLUMNS = model_metadata["feature_columns"]
+TARGET_COLUMN = model_metadata["target_column"]
+CLASS_NAMES = model_metadata["classes"]
 
 
-def score_model(pipe, X, y_true_enc):
-    y_pred = pipe.predict(X)
-    y_proba = pipe.predict_proba(X)
-    return {
-        "Accuracy": accuracy_score(y_true_enc, y_pred),
-        "AUC": roc_auc_score(y_true_enc, y_proba, multi_class="ovr", average="macro"),
-        "Precision": precision_score(y_true_enc, y_pred, average="macro", zero_division=0),
-        "Recall": recall_score(y_true_enc, y_pred, average="macro", zero_division=0),
-        "F1": f1_score(y_true_enc, y_pred, average="macro", zero_division=0),
-        "MCC": matthews_corrcoef(y_true_enc, y_pred),
-    }, y_pred
+def evaluate_model(model_pipeline, feature_matrix, true_labels_encoded):
+    """Run inference only (no .fit) and return the 6 required metrics + predictions."""
+    predicted_labels = model_pipeline.predict(feature_matrix)
+    predicted_probabilities = model_pipeline.predict_proba(feature_matrix)
+    metrics = {
+        "Accuracy": accuracy_score(true_labels_encoded, predicted_labels),
+        "AUC": roc_auc_score(true_labels_encoded, predicted_probabilities, multi_class="ovr", average="macro"),
+        "Precision": precision_score(true_labels_encoded, predicted_labels, average="macro", zero_division=0),
+        "Recall": recall_score(true_labels_encoded, predicted_labels, average="macro", zero_division=0),
+        "F1": f1_score(true_labels_encoded, predicted_labels, average="macro", zero_division=0),
+        "MCC": matthews_corrcoef(true_labels_encoded, predicted_labels),
+    }
+    return metrics, predicted_labels
 
 
 st.title("🫘 Dry Bean Classifier — Model Comparison Dashboard")
@@ -67,99 +68,102 @@ st.caption(
 
 with st.sidebar:
     st.header("1. Provide test data")
-    uploaded = st.file_uploader("Upload test CSV", type=["csv"])
-    use_sample = st.checkbox("Use bundled test_data.csv instead", value=not uploaded)
+    uploaded_file = st.file_uploader("Upload test CSV", type=["csv"])
+    use_bundled_sample = st.checkbox("Use bundled test_data.csv instead", value=not uploaded_file)
     st.header("2. Pick a model to inspect")
-    chosen_model = st.selectbox("Model", list(models.keys()))
+    selected_model_name = st.selectbox("Model", list(trained_models.keys()))
     st.divider()
     st.markdown(
         "**Expected columns:**\n\n"
-        f"- {len(FEATURE_COLS)} feature columns: `{', '.join(FEATURE_COLS[:4])}, ...`\n"
-        f"- target column: `{TARGET_COL}` with values in {CLASS_NAMES}"
+        f"- {len(FEATURE_COLUMNS)} feature columns: `{', '.join(FEATURE_COLUMNS[:4])}, ...`\n"
+        f"- target column: `{TARGET_COLUMN}` with values in {CLASS_NAMES}"
     )
 
-if uploaded is not None and not use_sample:
-    df = pd.read_csv(uploaded)
-    source = uploaded.name
-elif use_sample:
-    df = pd.read_csv("test_data.csv")
-    source = "bundled test_data.csv"
+if uploaded_file is not None and not use_bundled_sample:
+    test_dataframe = pd.read_csv(uploaded_file)
+    data_source_label = uploaded_file.name
+elif use_bundled_sample:
+    test_dataframe = pd.read_csv("test_data.csv")
+    data_source_label = "bundled test_data.csv"
 else:
-    df = None
-    source = None
+    test_dataframe = None
+    data_source_label = None
 
-if df is None:
+if test_dataframe is None:
     st.info("Upload a CSV from the sidebar (or tick 'Use bundled test_data.csv') to see results.")
     st.stop()
 
-missing = [c for c in FEATURE_COLS + [TARGET_COL] if c not in df.columns]
-if missing:
-    st.error(f"Uploaded CSV is missing required column(s): {missing}")
+missing_columns = [c for c in FEATURE_COLUMNS + [TARGET_COLUMN] if c not in test_dataframe.columns]
+if missing_columns:
+    st.error(f"Uploaded CSV is missing required column(s): {missing_columns}")
     st.stop()
 
-st.success(f"Loaded **{len(df)}** rows from **{source}**.")
+st.success(f"Loaded **{len(test_dataframe)}** rows from **{data_source_label}**.")
 
-X = df[FEATURE_COLS]
-y_raw = df[TARGET_COL].astype(str)
+feature_matrix = test_dataframe[FEATURE_COLUMNS]
+true_class_names = test_dataframe[TARGET_COLUMN].astype(str)
 try:
-    y_true_enc = label_encoder.transform(y_raw)
-except ValueError as e:
-    st.error(f"Target column contains labels the models were not trained on: {e}")
+    true_labels_encoded = label_encoder.transform(true_class_names)
+except ValueError as error:
+    st.error(f"Target column contains labels the models were not trained on: {error}")
     st.stop()
 
 # ---- Metrics for ALL five models on this uploaded data ----
 st.subheader("Results of all 5 models on your uploaded test data")
-all_rows = []
-all_preds = {}
-for name, pipe in models.items():
-    metrics, y_pred = score_model(pipe, X, y_true_enc)
-    all_preds[name] = y_pred
-    all_rows.append({"ML Model Name": name, **{k: round(v, 4) for k, v in metrics.items()}})
+comparison_rows = []
+predictions_by_model = {}
+for model_name, model_pipeline in trained_models.items():
+    model_metrics, predicted_labels = evaluate_model(model_pipeline, feature_matrix, true_labels_encoded)
+    predictions_by_model[model_name] = predicted_labels
+    comparison_rows.append({
+        "ML Model Name": model_name,
+        **{metric_name: round(metric_value, 4) for metric_name, metric_value in model_metrics.items()},
+    })
 
-comparison_df = pd.DataFrame(all_rows).set_index("ML Model Name")
-st.dataframe(comparison_df.style.highlight_max(axis=0, color="#c6f6c6"), use_container_width=True)
+comparison_table = pd.DataFrame(comparison_rows).set_index("ML Model Name")
+st.dataframe(comparison_table.style.highlight_max(axis=0, color="#c6f6c6"), use_container_width=True)
 
-best_model = comparison_df["F1"].idxmax()
-st.caption(f"Highest macro-F1 on this data: **{best_model}**")
+best_model_name = comparison_table["F1"].idxmax()
+st.caption(f"Highest macro-F1 on this data: **{best_model_name}**")
 
 # ---- Detailed view for the model selected in the sidebar ----
-st.subheader(f"Detailed view — {chosen_model}")
-y_pred = all_preds[chosen_model]
+st.subheader(f"Detailed view — {selected_model_name}")
+predicted_labels = predictions_by_model[selected_model_name]
 
-col1, col2 = st.columns([1, 1.2])
+metrics_column, plot_column = st.columns([1, 1.2])
 
-with col1:
+with metrics_column:
     st.markdown("**Evaluation metrics**")
-    metric_vals = comparison_df.loc[chosen_model]
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Accuracy", f"{metric_vals['Accuracy']:.4f}")
-    m2.metric("AUC", f"{metric_vals['AUC']:.4f}")
-    m3.metric("MCC", f"{metric_vals['MCC']:.4f}")
-    m4, m5, m6 = st.columns(3)
-    m4.metric("Precision", f"{metric_vals['Precision']:.4f}")
-    m5.metric("Recall", f"{metric_vals['Recall']:.4f}")
-    m6.metric("F1", f"{metric_vals['F1']:.4f}")
+    selected_model_metrics = comparison_table.loc[selected_model_name]
+    accuracy_box, auc_box, mcc_box = st.columns(3)
+    accuracy_box.metric("Accuracy", f"{selected_model_metrics['Accuracy']:.4f}")
+    auc_box.metric("AUC", f"{selected_model_metrics['AUC']:.4f}")
+    mcc_box.metric("MCC", f"{selected_model_metrics['MCC']:.4f}")
+    precision_box, recall_box, f1_box = st.columns(3)
+    precision_box.metric("Precision", f"{selected_model_metrics['Precision']:.4f}")
+    recall_box.metric("Recall", f"{selected_model_metrics['Recall']:.4f}")
+    f1_box.metric("F1", f"{selected_model_metrics['F1']:.4f}")
 
     st.markdown("**Classification report**")
-    report = classification_report(
-        y_true_enc, y_pred, target_names=label_encoder.classes_,
+    classification_report_dict = classification_report(
+        true_labels_encoded, predicted_labels, target_names=label_encoder.classes_,
         output_dict=True, zero_division=0,
     )
-    st.dataframe(pd.DataFrame(report).transpose().round(3), use_container_width=True)
+    st.dataframe(pd.DataFrame(classification_report_dict).transpose().round(3), use_container_width=True)
 
-with col2:
+with plot_column:
     st.markdown("**Confusion matrix**")
-    cm = confusion_matrix(y_true_enc, y_pred)
-    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    confusion_matrix_values = confusion_matrix(true_labels_encoded, predicted_labels)
+    confusion_matrix_figure, confusion_matrix_axis = plt.subplots(figsize=(5.5, 4.5))
     sns.heatmap(
-        cm, annot=True, fmt="d", cmap="Blues",
-        xticklabels=label_encoder.classes_, yticklabels=label_encoder.classes_, ax=ax,
+        confusion_matrix_values, annot=True, fmt="d", cmap="Blues",
+        xticklabels=label_encoder.classes_, yticklabels=label_encoder.classes_, ax=confusion_matrix_axis,
     )
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
+    confusion_matrix_axis.set_xlabel("Predicted")
+    confusion_matrix_axis.set_ylabel("Actual")
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
-    st.pyplot(fig)
+    st.pyplot(confusion_matrix_figure)
 
 with st.expander("Preview of uploaded data"):
-    st.dataframe(df.head(20), use_container_width=True)
+    st.dataframe(test_dataframe.head(20), use_container_width=True)
