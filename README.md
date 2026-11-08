@@ -132,7 +132,7 @@ All scoring loads the pre-trained `joblib` pipelines and calls `.predict`
 
 ## Live Streamlit App
 
-**App link:** _add the Streamlit Community Cloud URL here after deploying_
+**https://dry-bean-ml-classifier-app-w3hwruqowm75qvrz5xp5wh.streamlit.app**
 
 ## BITS Virtual Lab execution
 
