@@ -1,7 +1,10 @@
 streamlit==1.67.0
 scikit-learn==1.9.0
-numpy==2.2.6
-pandas==3.0.4
+# numpy/pandas left unpinned: exact local versions had no prebuilt wheel on
+# Streamlit Cloud's Python and conflicted with each other (pandas needs a
+# newer numpy than was pinned here) - let the resolver pick compatible ones.
+numpy
+pandas
 matplotlib==3.11.0
 seaborn==0.13.2
 joblib==1.6.0
